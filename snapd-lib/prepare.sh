@@ -463,7 +463,12 @@ setup_reflash_magic() {
         elif is_test_target_core 24; then
             BASE=core24
         fi
-        snap download "${BASE}" --channel="$BASE_CHANNEL" --basename="${BASE}"
+        
+        if [ -e "$PROJECT_PATH"/"$name"*_amd64.snap ]; then
+            mv "$PROJECT_PATH"/"$name"*_amd64.snap "${BASE}.snap"
+        else
+            snap download "${BASE}" --channel="$BASE_CHANNEL" --basename="${BASE}"
+        fi
 
         # we want to download the specific channel referenced by $BASE_CHANNEL,
         # but if we just seed that revision and $BASE_CHANNEL != $IMAGE_CHANNEL,
