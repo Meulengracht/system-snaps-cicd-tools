@@ -327,7 +327,7 @@ setup_reflash_magic() {
     # remove the above debug lines once the mentioned bug is fixed
     #snap install "--channel=${CORE_CHANNEL}" "$core_name"
     pwd
-    snap download "--channel=${CORE_CHANNEL}" "$core_name"
+    #snap download "--channel=${CORE_CHANNEL}" "$core_name"
     UNPACK_DIR="/tmp/$core_name-snap"
     unsquashfs -no-progress -d "$UNPACK_DIR" ${core_name}_*.snap
 
