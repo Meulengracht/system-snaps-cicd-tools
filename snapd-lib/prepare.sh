@@ -465,7 +465,7 @@ setup_reflash_magic() {
         fi
         
         if [ -e "$PROJECT_PATH"/"$name"*_amd64.snap ]; then
-            mv "$PROJECT_PATH"/"$name"*_amd64.snap "${BASE}.snap"
+            mv "$PROJECT_PATH"/"$BASE"*_amd64.snap "${BASE}.snap"
         else
             snap download "${BASE}" --channel="$BASE_CHANNEL" --basename="${BASE}"
         fi
