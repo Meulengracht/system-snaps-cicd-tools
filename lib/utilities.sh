@@ -61,6 +61,21 @@ switch_netplan_to_networkd() {
     fi
 }
 
+SNAPD_DEBUG_CONFIG=/etc/systemd/system/snapd.service.d/debug.conf
+switch_snapd_debug_on(){
+    systemctl stop snapd.service snapd.socket
+    mkdir -p "$(dirname $SNAPD_DEBUG_CONFIG)"
+    rm -f "$SNAPD_DEBUG_CONFIG"
+    cat > "$SNAPD_DEBUG_CONFIG" <<EOF
+[Service]
+Environment=SNAPD_DEBUG=1
+Environment=$*
+EOF
+    systemctl daemon-reload
+    systemctl start snapd.socket
+}
+
+
 # waits for a service to be active. Besides that, waits enough
 # time after detecting it to be active to prevent restarting
 # same service too quickly several times.
