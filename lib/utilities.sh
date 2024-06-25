@@ -69,7 +69,6 @@ switch_snapd_debug_on(){
     cat > "$SNAPD_DEBUG_CONFIG" <<EOF
 [Service]
 Environment=SNAPD_DEBUG=1
-Environment=$*
 EOF
     systemctl daemon-reload
     systemctl start snapd.socket
