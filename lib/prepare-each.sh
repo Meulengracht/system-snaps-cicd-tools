@@ -9,9 +9,9 @@ channel=${2:-22/stable}
 
 # Cleanup logs so we can just dump what has happened in the debug-each
 # step below after a test case ran.
-journalctl --rotate
-journalctl --vacuum-time=1ms
-dmesg -c > /dev/null
+#journalctl --rotate
+#journalctl --vacuum-time=1ms
+#dmesg -c > /dev/null
 
 printf "Wait for firstboot change to be ready\n"
 snap wait system seed.loaded
