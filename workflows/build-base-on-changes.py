@@ -345,7 +345,8 @@ def handle_riscv_build(lp, build_variant, output_dir):
 
 # Builds in lp the snap recipe and downloads the built snaps to output_dir.
 # Returns success of the operation.
-def build_and_download(lp, recipe, output_dir):
+def build_and_download(lp, recipe, output_dir, architectures=None,
+                       excluded_architectures=None):
     print('building snap recipe', recipe)
     snap = lp.load(recipe)
     # Move on only if the snap is not building already
@@ -353,11 +354,35 @@ def build_and_download(lp, recipe, output_dir):
         print('previous build is still running!!')
         return False
 
+    if architectures is not None or excluded_architectures:
+        available_architectures = [processor.name for processor in snap.processors]
+        if architectures is None:
+            architectures = available_architectures
+
+        requested_architectures = architectures
+        architectures = []
+        for arch in requested_architectures:
+            if arch not in available_architectures:
+                print("WARNING: Can't build snap for architecture {} as it is "
+                      "not enabled in the build job".format(arch))
+                continue
+            if arch in excluded_architectures:
+                continue
+            architectures.append(arch)
+    if architectures is not None and len(architectures) == 0:
+        print('No architectures requested, skipping build.')
+        return True
+
     # We use all the defaults of the snap recipe
-    request = snap.requestBuilds(
-        archive=snap.auto_build_archive_link,
-        pocket=snap.auto_build_pocket,
-        channels=snap.auto_build_channels)
+    request_args = {
+        'archive': snap.auto_build_archive_link,
+        'pocket': snap.auto_build_pocket,
+        'channels': snap.auto_build_channels,
+    }
+    if architectures:
+        print('building architectures: {}'.format(','.join(architectures)))
+        request_args['architectures'] = architectures
+    request = snap.requestBuilds(**request_args)
 
     # Wait for the builds to be launched
     print('builds requested:', request.builds_collection_link)
@@ -407,6 +432,52 @@ def build_and_download(lp, recipe, output_dir):
     return download_snaps(lp, builds, output_dir)
 
 
+def parse_architectures(architectures):
+    return [arch.strip() for arch in architectures.split(',') if arch.strip()]
+
+
+def determine_architectures(args):
+    optional_archs_env = os.environ.get('OPTIONAL_ARCHITECTURES', '')
+    optional_archs = []
+    if optional_archs_env.strip():
+        optional_archs = parse_architectures(optional_archs_env)
+
+    build_archs_env = os.environ.get('BUILD_ARCHITECTURES', '')
+    required_archs = None
+    if build_archs_env.strip():
+        required_archs = parse_architectures(build_archs_env)
+    excluded_archs = []
+    if args.build_scope == 'required':
+        excluded_archs = optional_archs
+        if required_archs is not None:
+            required_archs = [arch for arch in required_archs
+                                   if arch not in excluded_archs]
+    elif args.build_scope == 'optional':
+        if required_archs is None:
+            required_archs = optional_archs
+        else:
+            required_archs = [arch for arch in required_archs
+                                   if arch in optional_archs]
+    return required_archs, excluded_archs
+
+
+def create_tag(tag, build_scope):
+    if build_scope != 'optional':
+        subprocess.run(['git', 'tag', tag], check=True)
+        subprocess.run(['git', 'push', 'origin', tag], check=True)
+        return True
+    return False
+
+
+def filter_optional_architectures(build_archs, core_series):
+    # TODO: remove this once we consolidate core26 riscv64 recipes
+    optional_archs = build_archs or []
+    filtered_archs = optional_archs
+    if core_series == '26' and 'riscv64' in filtered_archs:
+        filtered_archs = [arch for arch in filtered_archs
+                                if arch != 'riscv64']
+    return filtered_archs
+
 def main():
     parser = ArgumentParser()
 
@@ -424,6 +495,11 @@ def main():
         '--dry-run', dest='dry_run', action='store_true')
     parser.add_argument(
         '--build-variant', dest='build_variant', default='')
+    parser.add_argument(
+        '--build-scope', dest='build_scope', default='required',
+        choices=['required', 'optional'])
+    parser.add_argument(
+        '--force-build', dest='force_build', action='store_true')
 
     args = parser.parse_args()
 
@@ -492,29 +568,46 @@ def main():
         policies.append(lambda: check_branch_changed(branch, args.build_variant))
     policies.append(lambda: check_packages_changed(args.core_series, args.build_variant))
 
-    ret = 0
-    for policy in policies:
-        # Go through all policies
-        if not policy():
-            continue
+    # Determine if we need to do a build by poking the conditions that
+    # may trigger one. Ignored if force-build is set.
+    trigger_build = args.force_build
+    if not trigger_build:
+        for policy in policies:
+            if not policy():
+                continue
+            trigger_build = True
+            break
 
+    ret = 0
+    if trigger_build:
         if args.dry_run:
             print('Would trigger new snap builds for core{}, with tag {}.'.format(
                 args.core_series, tag))
             return ret
 
         print('Triggering new snap build of core{}, with tag {}.'.format(args.core_series, tag))
-        subprocess.run(['git', 'tag', tag], check=True)
-        subprocess.run(['git', 'push', 'origin', tag], check=True)
-
-        if not build_and_download(lp, recipe, args.output_dir):
-            ret = 1
-        if ret == 0 and args.core_series == '26':
-            if not handle_riscv_build(lp, args.build_variant, args.output_dir):
+        tag_created = create_tag(tag, args.build_scope)
+        build_archs, excluded_archs = determine_architectures(args)
+        if args.build_scope == 'required':
+            print('Building required architectures: {}'.format(build_archs))
+            if not build_and_download(lp, recipe, args.output_dir, build_archs,
+                                      excluded_archs):
                 ret = 1
-        if ret == 1:
+            if ret == 0 and args.core_series == '26':
+                if not handle_riscv_build(lp, args.build_variant, args.output_dir):
+                    ret = 1
+        elif args.build_scope == 'optional':
+            optional_archs = build_archs or []
+            recipe_architectures = filter_optional_architectures(optional_archs, args.core_series)
+            if not build_and_download(lp, recipe, args.output_dir, recipe_architectures):
+                ret = 1
+            if ret == 0 and args.core_series == '26' and 'riscv64' in optional_archs:
+                if not handle_riscv_build(lp, args.build_variant, args.output_dir):
+                    ret = 1
+        # if the build fails, and it's a required build, we remove the tag
+        # again.
+        if ret == 1 and tag_created:
             remove_tag(tag)
-        break
 
     return ret
 
