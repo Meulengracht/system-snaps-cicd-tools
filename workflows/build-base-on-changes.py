@@ -354,6 +354,7 @@ def build_and_download(lp, recipe, output_dir, architectures=None,
         print('previous build is still running!!')
         return False
 
+    excluded_architectures = excluded_architectures or []
     if architectures is not None or excluded_architectures:
         available_architectures = [processor.name for processor in snap.processors]
         if architectures is None:
