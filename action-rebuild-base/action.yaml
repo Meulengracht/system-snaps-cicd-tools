@@ -32,7 +32,7 @@ inputs:
     description: Comma separated list of architectures that can fail independently
     required: false
     type: string
-    default: riscv64
+    default: ""
 
 outputs:
   snap_name:
@@ -134,7 +134,7 @@ runs:
             ${{ steps.release.outputs.snap_name }} $CHANNEL
     - name: Release optional architectures
       id: release_optional
-      if: ${{ steps.release.outputs.snap_name != '' }}
+      if: ${{ inputs.optional-architectures != '' }}
       continue-on-error: true
       shell: bash
       env:
@@ -147,6 +147,11 @@ runs:
         BUILD_VARIANT=${{ inputs.build-variant }}
         OUTPUT_DIR="${{ runner.temp }}/optional"
         mkdir -p "$OUTPUT_DIR"
+
+        ARTIFACT_SUFFIX=""
+        if [ "$BUILD_VARIANT" != regular ]; then
+            ARTIFACT_SUFFIX=-"$BUILD_VARIANT"
+        fi
 
         ./cicd/workflows/build-base-on-changes.py \
             --output-dir="$OUTPUT_DIR" \
@@ -166,7 +171,7 @@ runs:
         if [ -z "$SNAP_NAME" ]; then
             printf "No optional architecture build has been triggered\n"
         fi
-        SNAP_ARTIFACT="$SNAP_NAME"-optional
+        SNAP_ARTIFACT="$SNAP_NAME""$ARTIFACT_SUFFIX"-optional
 
         echo "snap_name=$SNAP_NAME" >> "$GITHUB_OUTPUT"
         echo "snap_artifact=$SNAP_ARTIFACT" >> "$GITHUB_OUTPUT"

@@ -343,17 +343,7 @@ def handle_riscv_build(lp, build_variant, output_dir):
     return build_and_download(lp, recipe, output_dir)
 
 
-# Builds in lp the snap recipe and downloads the built snaps to output_dir.
-# Returns success of the operation.
-def build_and_download(lp, recipe, output_dir, architectures=None,
-                       excluded_architectures=None):
-    print('building snap recipe', recipe)
-    snap = lp.load(recipe)
-    # Move on only if the snap is not building already
-    if is_build_running(snap):
-        print('previous build is still running!!')
-        return False
-
+def filter_snap_architectures(snap, architectures, excluded_architectures):
     excluded_architectures = excluded_architectures or []
     if architectures is not None or excluded_architectures:
         available_architectures = [processor.name for processor in snap.processors]
@@ -370,6 +360,21 @@ def build_and_download(lp, recipe, output_dir, architectures=None,
             if arch in excluded_architectures:
                 continue
             architectures.append(arch)
+    return architectures
+
+
+# Builds in lp the snap recipe and downloads the built snaps to output_dir.
+# Returns success of the operation.
+def build_and_download(lp, recipe, output_dir, architectures=None,
+                       excluded_architectures=None):
+    print('building snap recipe', recipe)
+    snap = lp.load(recipe)
+    # Move on only if the snap is not building already
+    if is_build_running(snap):
+        print('previous build is still running!!')
+        return False
+
+    architectures = filter_snap_architectures(snap, architectures, excluded_architectures)
     if architectures is not None and len(architectures) == 0:
         print('No architectures requested, skipping build.')
         return True
@@ -594,7 +599,7 @@ def main():
             if not build_and_download(lp, recipe, args.output_dir, build_archs,
                                       excluded_archs):
                 ret = 1
-            if ret == 0 and args.core_series == '26':
+            if ret == 0 and args.core_series == '26' and 'riscv64' not in excluded_archs:
                 if not handle_riscv_build(lp, args.build_variant, args.output_dir):
                     ret = 1
         elif args.build_scope == 'optional':
