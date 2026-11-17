@@ -1,0 +1,155 @@
+name: 'RebuildGadget'
+description: 'Build a gadget snap and publish to the edge channel'
+author: 'Philip Meulengracht'
+
+inputs:
+  architectures:
+    description: Comma separated list of architectures to build
+    required: false
+    default: "amd64,arm64"
+  snapcraft_channel:
+    description: Snapcraft snap installation channel
+    required: false
+    default: ""
+  branch:
+    description: Branch to build from
+    required: false
+    default: "${{ github.ref_name }}"
+  track:
+    description: Store track to publish to (defaults to the branch name)
+    required: false
+    default: ""
+  publish:
+    description: Whether to publish built snaps to the store
+    required: false
+    default: "true"
+
+outputs:
+  snap_name:
+    description: Name of the built snap
+    value: ${{ steps.build.outputs.snap_name }}
+  snap_artifact:
+    description: Artifact basename used for uploaded snaps
+    value: ${{ steps.build.outputs.snap_name }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cleanup job workspace
+      shell: bash
+      run: |
+        rm -rf "${{ github.workspace }}"
+        mkdir "${{ github.workspace }}"
+    
+    - name: Checking out
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.branch }}
+    
+    - name: Checking out CICD scripts
+      uses: actions/checkout@v4
+      with:
+        repository: snapcore/system-snaps-cicd-tools
+        ref: main
+        path: cicd
+    
+    - name: Build gadget snap
+      id: build
+      shell: bash
+      env:
+        BUILD_ARCHITECTURES: ${{ inputs.architectures }}
+        SNAPCRAFT_CHANNEL: ${{ inputs.snapcraft_channel }}
+        BRANCH: ${{ inputs.branch }}
+        OUTPUT_DIR: ${{ runner.temp }}/gadget
+      run: |
+        set -x
+        source ./cicd/workflows/common.sh
+        
+        snapcraft_yaml=$(get_snapcraft_yaml_path)
+        if [ -z "$snapcraft_yaml" ]; then
+            echo "No snapcraft.yaml found" >&2
+            exit 1
+        fi
+        
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install yq -yqq
+        
+        snap_name=$(yq -r .name "$snapcraft_yaml")
+        snap_type=$(yq -r .type "$snapcraft_yaml")
+        
+        # default to core for the base if not specified by the gadget,
+        # the only gadget that does not specify is core16
+        base=$(yq -r '.base // "core"' "$snapcraft_yaml")
+        if [ "$snap_type" != gadget ]; then
+            echo "Snap is not a gadget: $snap_type" >&2
+            exit 1
+        fi
+        
+        BUILD_ARCHITECTURES=${BUILD_ARCHITECTURES//[[:space:]]/}
+        if [[ ! "$BUILD_ARCHITECTURES" =~ ^[a-z0-9]+(,[a-z0-9]+)*$ ]]; then
+          echo "Invalid architecture list: $BUILD_ARCHITECTURES" >&2
+          exit 1
+        fi
+        
+        rm -rf "$OUTPUT_DIR"
+        mkdir -p "$OUTPUT_DIR"
+        build_and_download_snaps "$snap_name" \
+            "https://github.com/$GITHUB_REPOSITORY.git" "$BRANCH" "$base" \
+            "$OUTPUT_DIR" "$BUILD_ARCHITECTURES" "$SNAPCRAFT_CHANNEL"
+        shopt -s nullglob
+        
+        snaps=("$OUTPUT_DIR/${snap_name}_"*.snap)
+        if [ ${#snaps[@]} -eq 0 ]; then
+            echo "No gadget snaps were downloaded" >&2
+            exit 1
+        fi
+        
+        IFS=',' read -r -a architectures <<< "$BUILD_ARCHITECTURES"
+        for architecture in "${architectures[@]}"; do
+          arch_snaps=("$OUTPUT_DIR/${snap_name}_"*"_${architecture}.snap")
+          if [ ${#arch_snaps[@]} -eq 0 ]; then
+            echo "No gadget snap downloaded for $architecture" >&2
+            exit 1
+          fi
+        done
+        echo "snap_name=$snap_name" >> "$GITHUB_OUTPUT"
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.build.outputs.snap_name }}-snaps
+        path: ${{ runner.temp }}/gadget/${{ steps.build.outputs.snap_name }}_*.snap
+    
+    - name: Install CVE scanner
+      shell: bash
+      run: sudo snap install review-tools
+    
+    - name: Scan gadget snaps
+      shell: bash
+      env:
+        SNAP_NAME: ${{ steps.build.outputs.snap_name }}
+        OUTPUT_DIR: ${{ runner.temp }}/gadget
+      run: |
+        shopt -s nullglob
+        for snap in "$OUTPUT_DIR/${SNAP_NAME}_"*.snap; do
+            review-tools.scan-snap "$snap" > "${snap%.snap}-cve-scan.txt"
+        done
+    
+    - name: Upload CVE scan results
+      uses: actions/upload-artifact@v4
+      with:
+        name: cve-scan-${{ steps.build.outputs.snap_name }}
+        path: ${{ runner.temp }}/gadget/${{ steps.build.outputs.snap_name }}_*-cve-scan.txt
+    
+    - name: Publish gadget snaps to edge
+      if: ${{ inputs.publish == 'true' || inputs.publish == true }}
+      shell: bash
+      env:
+        SNAP_NAME: ${{ steps.build.outputs.snap_name }}
+        TRACK: ${{ inputs.track }}
+        BRANCH: ${{ inputs.branch }}
+        OUTPUT_DIR: ${{ runner.temp }}/gadget
+      run: |
+        if [ -z "$TRACK" ]; then
+            TRACK="$BRANCH"
+        fi
+        ./cicd/workflows/snap-publish.sh "$OUTPUT_DIR" "$SNAP_NAME" "$TRACK/edge"
