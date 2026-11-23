@@ -125,8 +125,15 @@ runs:
         for architecture in "${architectures[@]}"; do
           arch_snaps=("$OUTPUT_DIR/${snap_name}_"*"_${architecture}.snap")
           if [ ${#arch_snaps[@]} -eq 0 ]; then
-            echo "No gadget snap downloaded for $architecture" >&2
-            exit 1
+            # Special case for the single-arch builds where the resulting snap
+            # does not include the architecture in its filename (pi-gadgets)
+            if [ ${#architectures[@]} -eq 1 ] && [ ${#snaps[@]} -eq 1 ]; then
+              echo "Assuming snap in build directory for architecture $architecture is the right one"
+              break
+            else
+              echo "No gadget snap downloaded for $architecture" >&2
+              exit 1
+            fi
           fi
         done
         echo "snap_name=$snap_name" >> "$GITHUB_OUTPUT"
